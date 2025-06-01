@@ -3,6 +3,38 @@ using System.Text.RegularExpressions; // For Regex
 
 namespace PDFLibreria;
 
+public class PDFObject
+{
+    public int ObjectNumber { get; set; }
+    public int GenerationNumber { get; set; }
+    public string Content { get; set; }
+    public bool IsStream { get; set; }
+    public Dictionary<string, string> Dictionary { get; set; }
+    public long Offset { get; set; }
+    public List<int> References { get; set; }
+
+    public PDFObject()
+    {
+        Dictionary = new Dictionary<string, string>();
+        References = new List<int>();
+    }
+}
+
+public class PDFDocument
+{
+    public string Header { get; set; }
+    public List<PDFObject> Objects { get; set; }
+    public PDFObject Root { get; set; }
+    public PDFObject Pages { get; set; }
+    public List<PDFObject> PageObjects { get; set; }
+
+    public PDFDocument()
+    {
+        Objects = new List<PDFObject>();
+        PageObjects = new List<PDFObject>();
+    }
+}
+
 public class NativePDF
 {
     // ReadPdfBytes, FindObjects, FindXref, FindTrailer methods from previous steps
@@ -35,77 +67,112 @@ public class NativePDF
 
         Encoding pdfEncoding = Encoding.GetEncoding("ISO-8859-1");
 
-        string pdf1String = pdfEncoding.GetString(pdf1Bytes);
-        string pdf2String = pdfEncoding.GetString(pdf2Bytes);
+        // Parse both PDFs into document structures
+        PDFDocument doc1 = ParsePDFDocument(pdfEncoding.GetString(pdf1Bytes), pdfEncoding);
+        PDFDocument doc2 = ParsePDFDocument(pdfEncoding.GetString(pdf2Bytes), pdfEncoding);
 
-        // 1. Attempt to find the maximum object number in PDF1
-        int maxObjNumPdf1 = FindMaxObjectNumber(pdf1String);
-        Console.WriteLine($"Max object number found in PDF1: {maxObjNumPdf1}");
-
-        // 2. Separate header, body for PDF1
-        string pdf1Header = GetHeader(pdf1String);
-        string pdf1Body = GetBody(pdf1String, pdfEncoding);
-
-        // 3. Separate body for PDF2
-        string pdf2Body = GetBody(pdf2String, pdfEncoding);
-
-        // 4. Attempt to renumber objects in PDF2's body and update references
-        string renumberedPdf2Body = RenumberPdfObjectsAndReferences(pdf2Body, maxObjNumPdf1);
-        Console.WriteLine($"PDF2 body renumbering attempted. Original length: {pdf2Body.Length}, New length: {renumberedPdf2Body.Length}");
-
-        // 5. Concatenate: PDF1 header + PDF1 body + Renumbered PDF2 body
-        StringBuilder mergedPdfContentBuilder = new StringBuilder();
-        mergedPdfContentBuilder.Append(pdf1Header);
-        mergedPdfContentBuilder.Append(pdf1Body);
-        if (!pdf1Body.EndsWith("\r\n") && !pdf1Body.EndsWith("\n"))
+        if (doc1.Pages == null || doc2.Pages == null)
         {
-             mergedPdfContentBuilder.Append("\r\n");
+            Console.WriteLine("Error: One or both PDFs are missing required page structure.");
+            return;
         }
-        mergedPdfContentBuilder.Append(renumberedPdf2Body);
 
-        // 6. Update the /Pages object (very naively)
-        string tempMergedContent = mergedPdfContentBuilder.ToString();
-        tempMergedContent = UpdatePagesObjectInMergedContent(tempMergedContent, maxObjNumPdf1, pdf1String, pdf2String, pdfEncoding);
-
-        // 7. Reconstruct XRef Table and Trailer
-        byte[] finalMergedBodyBytes = pdfEncoding.GetBytes(tempMergedContent);
-        List<KeyValuePair<int, long>> xrefEntries = CalculateXrefEntries(finalMergedBodyBytes, pdfEncoding);
-
-        int totalObjectsInFinalPdf = 0;
-        if (xrefEntries.Any())
+        // Calculate new object numbers for PDF2
+        int maxObjNumPdf1 = doc1.Objects.Max(o => o.ObjectNumber);
+        Dictionary<int, int> objectNumberMap = new Dictionary<int, int>();
+        
+        // Create mapping for PDF2 objects
+        foreach (var obj in doc2.Objects)
         {
-            totalObjectsInFinalPdf = xrefEntries.Max(kvp => kvp.Key) + 1;
+            int newNumber = obj.ObjectNumber + maxObjNumPdf1;
+            objectNumberMap[obj.ObjectNumber] = newNumber;
+            obj.ObjectNumber = newNumber;
         }
 
-        string newXrefTable = BuildXrefTable(xrefEntries, totalObjectsInFinalPdf);
+        // Update references in PDF2 objects
+        foreach (var obj in doc2.Objects)
+        {
+            // Update dictionary entries
+            foreach (var key in obj.Dictionary.Keys.ToList())
+            {
+                var value = obj.Dictionary[key];
+                var refMatches = Regex.Matches(value, @"(\d+)\s+(\d+)\s+R");
+                foreach (Match refMatch in refMatches)
+                {
+                    int oldRef = int.Parse(refMatch.Groups[1].Value);
+                    if (objectNumberMap.TryGetValue(oldRef, out int newRef))
+                    {
+                        obj.Dictionary[key] = value.Replace(
+                            $"{oldRef} {refMatch.Groups[2].Value} R",
+                            $"{newRef} {refMatch.Groups[2].Value} R"
+                        );
+                    }
+                }
+            }
 
-        long startXrefOffset = finalMergedBodyBytes.Length;
-        if (!tempMergedContent.EndsWith("\r\n") && !tempMergedContent.EndsWith("\n")) {
-            startXrefOffset += pdfEncoding.GetByteCount("\r\n");
+            // Update content references
+            var contentRefMatches = Regex.Matches(obj.Content, @"(\d+)\s+(\d+)\s+R");
+            foreach (Match refMatch in contentRefMatches)
+            {
+                int oldRef = int.Parse(refMatch.Groups[1].Value);
+                if (objectNumberMap.TryGetValue(oldRef, out int newRef))
+                {
+                    obj.Content = obj.Content.Replace(
+                        $"{oldRef} {refMatch.Groups[2].Value} R",
+                        $"{newRef} {refMatch.Groups[2].Value} R"
+                    );
+                }
+            }
         }
 
-        string rootObjectRef = GetRootObjectRef(pdf1String);
-        string newTrailer = BuildTrailer(totalObjectsInFinalPdf, rootObjectRef, startXrefOffset);
+        // Merge page trees
+        var allPages = new List<PDFObject>();
+        allPages.AddRange(doc1.PageObjects);
+        allPages.AddRange(doc2.PageObjects);
 
-        // 8. Write to output file
+        // Update PDF1's Pages object
+        if (doc1.Pages != null)
+        {
+            var kidsRefs = string.Join(" ", allPages.Select(p => $"{p.ObjectNumber} {p.GenerationNumber} R"));
+            doc1.Pages.Dictionary["/Kids"] = $"[{kidsRefs}]";
+            doc1.Pages.Dictionary["/Count"] = allPages.Count.ToString();
+        }
+
+        // Combine all objects
+        var allObjects = new List<PDFObject>();
+        allObjects.AddRange(doc1.Objects);
+        allObjects.AddRange(doc2.Objects);
+
+        // Build the merged PDF content
+        var mergedContent = new StringBuilder();
+        mergedContent.Append(doc1.Header);
+
+        // Write all objects
+        foreach (var obj in allObjects.OrderBy(o => o.ObjectNumber))
+        {
+            mergedContent.Append(RebuildObject(obj));
+        }
+
+        // Calculate and write xref table
+        var xrefEntries = allObjects
+            .OrderBy(o => o.ObjectNumber)
+            .Select(o => new KeyValuePair<int, long>(o.ObjectNumber, o.Offset))
+            .ToList();
+
+        string xrefTable = BuildXrefTable(xrefEntries, allObjects.Count);
+        mergedContent.Append(xrefTable);
+
+        // Write trailer
+        long startXrefOffset = pdfEncoding.GetByteCount(mergedContent.ToString());
+        string rootRef = $"{doc1.Root.ObjectNumber} {doc1.Root.GenerationNumber} R";
+        string trailer = BuildTrailer(allObjects.Count, rootRef, startXrefOffset);
+        mergedContent.Append(trailer);
+
+        // Write to output file
         try
         {
-            using (FileStream fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write))
-            {
-                fs.Write(finalMergedBodyBytes, 0, finalMergedBodyBytes.Length);
-                if (!tempMergedContent.EndsWith("\r\n") && !tempMergedContent.EndsWith("\n"))
-                {
-                    byte[] newlineBytes = pdfEncoding.GetBytes("\r\n");
-                    fs.Write(newlineBytes, 0, newlineBytes.Length);
-                }
-
-                byte[] xrefBytes = pdfEncoding.GetBytes(newXrefTable);
-                fs.Write(xrefBytes, 0, xrefBytes.Length);
-
-                byte[] trailerBytes = pdfEncoding.GetBytes(newTrailer);
-                fs.Write(trailerBytes, 0, trailerBytes.Length);
-            }
-            Console.WriteLine($"Rudimentary PDF merge saved to {outputPath}");
+            File.WriteAllBytes(outputPath, pdfEncoding.GetBytes(mergedContent.ToString()));
+            Console.WriteLine($"PDF merge completed successfully: {outputPath}");
         }
         catch (Exception ex)
         {
@@ -130,129 +197,6 @@ public class NativePDF
             return pdfString.Substring(0, newline + (pdfString[newline] == '\r' && pdfString.Length > newline+1 && pdfString[newline+1] == '\n' ? 2:1) );
         }
         return "%PDF-1.7\r\n%âãÏÓ\r\n";
-    }
-
-    private string GetBody(string pdfString, Encoding enc)
-    {
-        int lastXref = pdfString.LastIndexOf("xref");
-        int startOfBody = 0;
-        if (pdfString.StartsWith("%PDF-")) {
-            startOfBody = pdfString.IndexOfAny(new char[] {'\r', '\n'});
-            if(startOfBody != -1) startOfBody += (pdfString[startOfBody] == '\r' && pdfString.Length > startOfBody+1 && pdfString[startOfBody+1] == '\n' ? 2:1); else startOfBody =0;
-        }
-
-        if (lastXref == -1) return pdfString.Substring(startOfBody);
-
-        string upToXref = pdfString.Substring(startOfBody, lastXref - startOfBody);
-        int lastEndObj = upToXref.LastIndexOf("endobj");
-        if(lastEndObj != -1)
-        {
-            return upToXref.Substring(0, lastEndObj + "endobj".Length) + "\r\n";
-        }
-        return upToXref;
-    }
-
-    private int FindMaxObjectNumber(string pdfString)
-    {
-        int maxNum = 0;
-        Regex objRegex = new Regex(@"^\s*(\d+)\s+\d+\s+obj", RegexOptions.Multiline);
-        foreach (Match match in objRegex.Matches(pdfString))
-        {
-            if (int.TryParse(match.Groups[1].Value, out int num))
-            {
-                if (num > maxNum) maxNum = num;
-            }
-        }
-        return maxNum;
-    }
-
-    private string RenumberPdfObjectsAndReferences(string pdfBody, int offset)
-    {
-        if (offset == 0) return pdfBody;
-
-        var objectNumbersToUpdate = new SortedDictionary<int, bool>(Comparer<int>.Create((a, b) => b.CompareTo(a)));
-
-        Regex objDefRegex = new Regex(@"^\s*(\d+)\s+(\d+)\s+obj", RegexOptions.Multiline);
-        foreach (Match match in objDefRegex.Matches(pdfBody))
-        {
-            if (int.TryParse(match.Groups[1].Value, out int num)) objectNumbersToUpdate[num] = true;
-        }
-
-        Regex objRefRegex = new Regex(@"(\d+)\s+(\d+)\s+R");
-        foreach (Match match in objRefRegex.Matches(pdfBody))
-        {
-            if (int.TryParse(match.Groups[1].Value, out int num)) objectNumbersToUpdate[num] = true;
-        }
-
-        string currentBody = pdfBody;
-        foreach (var numEntry in objectNumbersToUpdate)
-        {
-            int oldNum = numEntry.Key;
-            int newNum = oldNum + offset;
-            currentBody = Regex.Replace(currentBody, $@"(?<!\d){oldNum}\s+(\d+\s+R)", $"{newNum} $1");
-            currentBody = Regex.Replace(currentBody, $@"^(\s*){oldNum}\s+(\d+\s+obj)", $"$1{newNum} $2", RegexOptions.Multiline);
-        }
-        return currentBody;
-    }
-
-    private string UpdatePagesObjectInMergedContent(string mergedContent, int pdf2Offset, string pdf1OriginalString, string pdf2OriginalString, Encoding enc)
-    {
-        string pagesPattern = @"(\d+\s+\d+\s+obj\s*<<[^>]*?/Type\s*/Pages[^>]*?)/Kids\s*\[([^\]]*)\]([^>]*?/Count\s*)(\d+)([^>]*?>>\s*endobj)";
-
-        Match pdf1PagesMatch = Regex.Match(mergedContent, pagesPattern, RegexOptions.Singleline);
-
-        if (!pdf1PagesMatch.Success) {
-            Console.WriteLine("WARNING (UpdatePagesObject): PDF1 main /Pages object not found or pattern mismatch. Skipping page tree update.");
-            return mergedContent;
-        }
-
-        string pdf1KidsString = pdf1PagesMatch.Groups[2].Value.Trim();
-        int pdf1Count = int.TryParse(pdf1PagesMatch.Groups[4].Value, out var c1) ? c1 : 0;
-
-        Match pdf2PagesMatch = Regex.Match(pdf2OriginalString, pagesPattern, RegexOptions.Singleline);
-         if (!pdf2PagesMatch.Success) {
-            Console.WriteLine("WARNING (UpdatePagesObject): PDF2 main /Pages object not found or pattern mismatch. Skipping page tree update.");
-            return mergedContent;
-        }
-        string pdf2KidsString = pdf2PagesMatch.Groups[2].Value.Trim();
-        int pdf2Count = int.TryParse(pdf2PagesMatch.Groups[4].Value, out var c2) ? c2 : 0;
-
-        StringBuilder renumberedPdf2Kids = new StringBuilder();
-        Regex kidRefRegex = new Regex(@"(\d+)\s+(\d+)\s+R");
-        foreach(Match kidMatch in kidRefRegex.Matches(pdf2KidsString))
-        {
-            if (int.TryParse(kidMatch.Groups[1].Value, out int kidObjNum))
-            {
-                renumberedPdf2Kids.Append($"{kidObjNum + pdf2Offset} {kidMatch.Groups[2].Value} R ");
-            }
-        }
-
-        string combinedKids = (pdf1KidsString + " " + renumberedPdf2Kids.ToString()).Trim();
-        int newTotalCount = pdf1Count + pdf2Count;
-
-        string updatedPagesObject =
-            $"{pdf1PagesMatch.Groups[1].Value}/Kids [{combinedKids}] {pdf1PagesMatch.Groups[3].Value}{newTotalCount}{pdf1PagesMatch.Groups[5].Value}";
-        return mergedContent.Replace(pdf1PagesMatch.Groups[0].Value, updatedPagesObject);
-    }
-
-    private List<KeyValuePair<int, long>> CalculateXrefEntries(byte[] pdfBytes, Encoding enc)
-    {
-        var entries = new List<KeyValuePair<int, long>>();
-        string pdfString = enc.GetString(pdfBytes);
-
-        Regex objRegex = new Regex(@"^\s*(\d+)\s+(\d+)\s+obj", RegexOptions.Multiline);
-        MatchCollection matches = objRegex.Matches(pdfString);
-
-        foreach (Match match in matches)
-        {
-            if (int.TryParse(match.Groups[1].Value, out int objNum))
-            {
-                long byteOffset = enc.GetByteCount(pdfString.Substring(0, match.Index));
-                entries.Add(new KeyValuePair<int, long>(objNum, byteOffset));
-            }
-        }
-        entries.Sort((a,b) => a.Key.CompareTo(b.Key));
-        return entries;
     }
 
     private string BuildXrefTable(List<KeyValuePair<int, long>> entries, int totalObjects)
@@ -286,23 +230,6 @@ public class NativePDF
         return xrefBuilder.ToString();
     }
 
-    private string GetRootObjectRef(string pdfString)
-    {
-        int trailerPos = pdfString.LastIndexOf("trailer");
-        if (trailerPos == -1) return "1 0 R";
-
-        string relevantString = pdfString.Substring(trailerPos);
-        Match rootMatch = Regex.Match(relevantString, @"/Root\s*(\d+\s+\d+\s*R)");
-        if (rootMatch.Success)
-        {
-            return rootMatch.Groups[1].Value;
-        }
-        rootMatch = Regex.Match(pdfString, @"/Root\s*(\d+\s+\d+\s*R)");
-        if (rootMatch.Success) return rootMatch.Groups[1].Value;
-
-        return "1 0 R";
-    }
-
     private string BuildTrailer(int numObjects, string rootRef, long startXrefByteOffsetValue)
     {
         StringBuilder trailer = new StringBuilder();
@@ -315,5 +242,247 @@ public class NativePDF
         trailer.AppendLine(startXrefByteOffsetValue.ToString());
         trailer.AppendLine("%%EOF");
         return trailer.ToString();
+    }
+
+    private PDFDocument ParsePDFDocument(string pdfContent, Encoding encoding)
+    {
+        var doc = new PDFDocument();
+        doc.Header = GetHeader(pdfContent);
+        
+        // Parse all objects
+        var objectMatches = Regex.Matches(pdfContent, @"(\d+)\s+(\d+)\s+obj\s*(.*?)(?=\d+\s+\d+\s+obj|$)", RegexOptions.Singleline);
+        
+        foreach (Match match in objectMatches)
+        {
+            var obj = new PDFObject
+            {
+                ObjectNumber = int.Parse(match.Groups[1].Value),
+                GenerationNumber = int.Parse(match.Groups[2].Value),
+                Content = match.Groups[3].Value.Trim(),
+                Offset = encoding.GetByteCount(pdfContent.Substring(0, match.Index))
+            };
+
+            // Check if it's a stream
+            if (obj.Content.Contains("stream") && obj.Content.Contains("endstream"))
+            {
+                obj.IsStream = true;
+                // Extract stream dictionary
+                var dictMatch = Regex.Match(obj.Content, @"<<(.*?)>>\s*stream", RegexOptions.Singleline);
+                if (dictMatch.Success)
+                {
+                    ParseDictionary(dictMatch.Groups[1].Value, obj);
+                }
+            }
+            else
+            {
+                // Parse dictionary if exists
+                var dictMatch = Regex.Match(obj.Content, @"<<(.*?)>>", RegexOptions.Singleline);
+                if (dictMatch.Success)
+                {
+                    ParseDictionary(dictMatch.Groups[1].Value, obj);
+                }
+            }
+
+            // Find references
+            var refMatches = Regex.Matches(obj.Content, @"(\d+)\s+(\d+)\s+R");
+            foreach (Match refMatch in refMatches)
+            {
+                obj.References.Add(int.Parse(refMatch.Groups[1].Value));
+            }
+
+            doc.Objects.Add(obj);
+        }
+
+        // Find Root and Pages objects
+        doc.Root = doc.Objects.FirstOrDefault(o => o.Dictionary.ContainsKey("/Type") && o.Dictionary["/Type"] == "/Catalog");
+        if (doc.Root != null && doc.Root.Dictionary.ContainsKey("/Pages"))
+        {
+            var pagesRef = doc.Root.Dictionary["/Pages"];
+            var pagesMatch = Regex.Match(pagesRef, @"(\d+)\s+(\d+)\s+R");
+            if (pagesMatch.Success)
+            {
+                doc.Pages = doc.Objects.FirstOrDefault(o => o.ObjectNumber == int.Parse(pagesMatch.Groups[1].Value));
+            }
+        }
+
+        // Find all page objects
+        if (doc.Pages != null)
+        {
+            var kidsRef = doc.Pages.Dictionary.GetValueOrDefault("/Kids", "");
+            var kidMatches = Regex.Matches(kidsRef, @"(\d+)\s+(\d+)\s+R");
+            foreach (Match kidMatch in kidMatches)
+            {
+                var pageObj = doc.Objects.FirstOrDefault(o => o.ObjectNumber == int.Parse(kidMatch.Groups[1].Value));
+                if (pageObj != null)
+                {
+                    doc.PageObjects.Add(pageObj);
+                }
+            }
+        }
+
+        return doc;
+    }
+
+    private void ParseDictionary(string dictContent, PDFObject obj)
+    {
+        var entries = Regex.Matches(dictContent, @"/(\w+)\s+([^/]+?)(?=/\w+|$)");
+        foreach (Match entry in entries)
+        {
+            obj.Dictionary[entry.Groups[1].Value] = entry.Groups[2].Value.Trim();
+        }
+    }
+
+    private string RebuildObject(PDFObject obj)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"{obj.ObjectNumber} {obj.GenerationNumber} obj\r\n");
+        
+        if (obj.Dictionary.Any())
+        {
+            sb.Append("<<\r\n");
+            foreach (var entry in obj.Dictionary)
+            {
+                sb.Append($"/{entry.Key} {entry.Value}\r\n");
+            }
+            sb.Append(">>\r\n");
+        }
+
+        if (obj.IsStream)
+        {
+            sb.Append("stream\r\n");
+            // Here we would handle stream content
+            sb.Append("endstream\r\n");
+        }
+        else
+        {
+            sb.Append(obj.Content);
+        }
+
+        sb.Append("\r\nendobj\r\n");
+        return sb.ToString();
+    }
+
+    public bool TestMergePDF(string pdfPath1, string pdfPath2, string outputPath)
+    {
+        try
+        {
+            Console.WriteLine("Iniciando prueba de merge de PDFs...");
+            
+            // Verificar que los archivos existen
+            if (!File.Exists(pdfPath1))
+            {
+                Console.WriteLine($"Error: No se encuentra el archivo {pdfPath1}");
+                return false;
+            }
+            if (!File.Exists(pdfPath2))
+            {
+                Console.WriteLine($"Error: No se encuentra el archivo {pdfPath2}");
+                return false;
+            }
+
+            // Verificar que los archivos son PDFs válidos
+            if (!IsValidPDF(pdfPath1))
+            {
+                Console.WriteLine($"Error: {pdfPath1} no es un PDF válido");
+                return false;
+            }
+            if (!IsValidPDF(pdfPath2))
+            {
+                Console.WriteLine($"Error: {pdfPath2} no es un PDF válido");
+                return false;
+            }
+
+            // Obtener información de los PDFs originales
+            var pdf1Info = GetPDFInfo(pdfPath1);
+            var pdf2Info = GetPDFInfo(pdfPath2);
+            
+            Console.WriteLine($"PDF1: {pdf1Info.PageCount} páginas, {pdf1Info.ObjectCount} objetos");
+            Console.WriteLine($"PDF2: {pdf2Info.PageCount} páginas, {pdf2Info.ObjectCount} objetos");
+
+            // Realizar el merge
+            MergePDF(pdfPath1, pdfPath2, outputPath);
+
+            // Verificar que el archivo resultante existe
+            if (!File.Exists(outputPath))
+            {
+                Console.WriteLine("Error: No se generó el archivo de salida");
+                return false;
+            }
+
+            // Verificar que el PDF resultante es válido
+            if (!IsValidPDF(outputPath))
+            {
+                Console.WriteLine("Error: El PDF resultante no es válido");
+                return false;
+            }
+
+            // Obtener información del PDF resultante
+            var resultInfo = GetPDFInfo(outputPath);
+            Console.WriteLine($"PDF Resultante: {resultInfo.PageCount} páginas, {resultInfo.ObjectCount} objetos");
+
+            // Verificar que el número de páginas es correcto
+            if (resultInfo.PageCount != pdf1Info.PageCount + pdf2Info.PageCount)
+            {
+                Console.WriteLine($"Error: El número de páginas no coincide. Esperado: {pdf1Info.PageCount + pdf2Info.PageCount}, Obtenido: {resultInfo.PageCount}");
+                return false;
+            }
+
+            Console.WriteLine("Prueba completada exitosamente");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error durante la prueba: {ex.Message}");
+            return false;
+        }
+    }
+
+    private bool IsValidPDF(string filePath)
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(filePath);
+            if (bytes.Length < 5) return false;
+
+            // Verificar la firma del PDF
+            string header = Encoding.ASCII.GetString(bytes, 0, 5);
+            if (!header.StartsWith("%PDF-")) return false;
+
+            // Verificar que termina con %%EOF
+            string footer = Encoding.ASCII.GetString(bytes, bytes.Length - 6, 6);
+            if (!footer.Contains("%%EOF")) return false;
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private (int PageCount, int ObjectCount) GetPDFInfo(string filePath)
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(filePath);
+            string content = Encoding.GetEncoding("ISO-8859-1").GetString(bytes);
+
+            // Contar objetos
+            int objectCount = Regex.Matches(content, @"\d+\s+\d+\s+obj").Count;
+
+            // Contar páginas
+            int pageCount = 0;
+            var pagesMatch = Regex.Match(content, @"/Type\s*/Pages[^>]*?/Count\s*(\d+)");
+            if (pagesMatch.Success)
+            {
+                int.TryParse(pagesMatch.Groups[1].Value, out pageCount);
+            }
+
+            return (pageCount, objectCount);
+        }
+        catch
+        {
+            return (0, 0);
+        }
     }
 }
