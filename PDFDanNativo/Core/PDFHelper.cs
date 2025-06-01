@@ -1,5 +1,6 @@
 ﻿using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace PDFDanNativo.Core;
 
@@ -38,6 +39,24 @@ public static class PDFHelper
             searchIdx = objEnd;
         }
         return objs;
+    }
+
+    public static string[] ExtractPdfObjects(string pdf)
+    {
+        var objects = new List<string>();
+        int start = 0;
+        while (true)
+        {
+            int objStart = pdf.IndexOf("obj", start);
+            if (objStart == -1) break;
+
+            int objEnd = pdf.IndexOf("endobj", objStart);
+            if (objEnd == -1) break;
+
+            objects.Add(pdf.Substring(objStart - 10, objEnd + 6 - (objStart - 10)));
+            start = objEnd + 6;
+        }
+        return objects.ToArray();
     }
 
     // Versión robusta para JPEGs estándar (SOF0, SOF2, SOF3, SOF1, SOF9, SOF13)
@@ -171,5 +190,121 @@ public static class PDFHelper
     {
         return $"{fieldsArrayObjectNumber + 1} 0 obj\n" +
                $"<< /Fields {fieldsArrayObjectNumber} 0 R >>\nendobj\n";
+    }
+
+    // Attach
+    public static string BuildEmbeddedFileObject(int objNumber, byte[] fileBytes)
+    {
+        return $"{objNumber} 0 obj\n" +
+               $"<< /Type /EmbeddedFile /Length {fileBytes.Length} >>\n" +
+               "stream\n" +
+               Encoding.ASCII.GetString(fileBytes) + "\n" +
+               "endstream\nendobj\n";
+    }
+
+    public static string BuildFileSpecObject(int objNumber, string fileName, int embeddedFileObjNumber)
+    {
+        return $"{objNumber} 0 obj\n" +
+               $"<< /Type /Filespec /F ({fileName}) /EF <</F {embeddedFileObjNumber} 0 R>> >>\n" +
+               "endobj\n";
+    }
+
+    public static string BuildNamesObject(int objNumber, Dictionary<string, int> fileSpecs)
+    {
+        var names = string.Join(" ", fileSpecs.Select(kv => $"({kv.Key}) {kv.Value} 0 R"));
+        return $"{objNumber} 0 obj\n" +
+               $"<< /Names [{names}] >>\n" +
+               "endobj\n";
+    }
+
+    public static string BuildEmbeddedFilesObject(int objNumber, int namesObjNumber)
+    {
+        return $"{objNumber} 0 obj\n" +
+               $"<< /EmbeddedFiles {namesObjNumber} 0 R >>\n" +
+               "endobj\n";
+    }
+
+    public static string BuildFileAttachmentObject(int objNumber, string fileName, int fileSpecObjNumber)
+    {
+        return $"{objNumber} 0 obj\n" +
+               "<< /Type /Annot /Subtype /FileAttachment\n" +
+               "   /Rect [10 10 30 30]\n" +
+               $"   /FS {fileSpecObjNumber} 0 R\n" +
+               $"   /Contents ({fileName})\n" +
+               "   /Name PushPin\n" +
+               "   /T (Adjunto)\n" +
+               ">>\n" +
+               "endobj\n";
+    }
+
+    public static string UpdateCatalogWithNames(string catalog, int embeddedFilesObjNumber)
+    {
+        if (!catalog.Contains("/Names"))
+        {
+            int insertAt = catalog.IndexOf(">>");
+            return catalog.Insert(insertAt, $" /Names {embeddedFilesObjNumber} 0 R");
+        }
+        return catalog;
+    }
+
+    public static string UpdatePageWithAnnotation(string page, int annotObjNumber)
+    {
+        if (!page.Contains("/Annots"))
+        {
+            int insert = page.LastIndexOf("endobj");
+            return page.Insert(insert, $" /Annots [{annotObjNumber} 0 R]\n");
+        }
+        else
+        {
+            int annotsStart = page.IndexOf("/Annots [") + "/Annots [".Length;
+            return page.Insert(annotsStart, $"{annotObjNumber} 0 R ");
+        }
+    }
+
+    public static string BuildImageObject(int objNumber, byte[] imgBytes, int width, int height)
+    {
+        return $"{objNumber} 0 obj\n" +
+               $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} " +
+               $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode " +
+               $"/Length {imgBytes.Length} >>\n" +
+               "stream\n" +
+               $"{Convert.ToBase64String(imgBytes)}\n" +
+               "endstream\nendobj\n";
+    }
+
+    public static string BuildImageContentObject(int objNumber, int imgObjNumber, int displayWidth, int displayHeight, int posX, int posY)
+    {
+        string contentStream = $@"q
+            {displayWidth} 0 0 {displayHeight} {posX} {posY} cm
+            /Im1 Do
+            Q";
+        return $"{objNumber} 0 obj\n<< /Length {contentStream.Length} >>\nstream\n{contentStream}\nendstream\nendobj\n";
+    }
+
+    public static string UpdatePageWithImage(string pageObj, int imgObjNumber, int contentObjNumber, int originalContentObjNumber)
+    {
+        // Agrega la imagen a /Resources /XObject
+        if (pageObj.Contains("/XObject"))
+        {
+            pageObj = Regex.Replace(
+                pageObj,
+                @"/XObject\s*<<",
+                $"/XObject << /Im1 {imgObjNumber} 0 R ");
+        }
+        else
+        {
+            pageObj = Regex.Replace(
+                pageObj,
+                @"/Resources\s*<<",
+                $"/Resources << /XObject <</Im1 {imgObjNumber} 0 R>> ");
+        }
+
+        // Actualiza /Contents para incluir ambos streams
+        pageObj = Regex.Replace(
+            pageObj,
+            @"/Contents\s+\d+\s+0\s+R",
+            $"/Contents [{originalContentObjNumber} 0 R {contentObjNumber} 0 R]");
+
+        return pageObj;
     }
 }

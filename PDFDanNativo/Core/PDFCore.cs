@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using PDFDanNativo.Models;
+using System.Text.RegularExpressions;
 
 namespace PDFDanNativo.Core;
 
@@ -32,6 +33,11 @@ public interface IPDFCore
 
     string[] BuildPdfFormObjects(string[] fields, PDFConfig config);
 
+    string ProcessFormFields(string pdf, Dictionary<string, string> fields);
+
+    (List<string> objects, int lastObjNumber) ProcessAttachments(string pdf, string[] txtPaths);
+
+    (List<string> objects, int lastObjNumber) ProcessImage(string pdf, string imagePath, float scale = 0.8f);
 }
 
 public class PDFCore : IPDFCore
@@ -379,4 +385,164 @@ public class PDFCore : IPDFCore
 
         return objects.ToArray();
     }
+
+    public string ProcessFormFields(string pdf, Dictionary<string, string> fields)
+    {
+        foreach (var kv in fields)
+        {
+            string fieldName = kv.Key;
+            string fieldValue = kv.Value.Replace("(", "\\(").Replace(")", "\\)");
+            int tIndex = pdf.IndexOf($"/T ({fieldName})");
+            if (tIndex == -1) continue;
+
+            // Busca inicio y fin del objeto
+            int objStart = pdf.LastIndexOf("obj", tIndex);
+            int objEnd = pdf.IndexOf("endobj", tIndex);
+            if (objStart == -1 || objEnd == -1) continue;
+
+            // Extrae el objeto
+            string objText = pdf.Substring(objStart, objEnd + 6 - objStart);
+
+            // Encuentra la posición del campo (Rect [x1 y1 x2 y2])
+            var rectMatch = Regex.Match(objText, @"\/Rect\s*\[([^\]]+)\]");
+            string rect = rectMatch.Success ? rectMatch.Groups[1].Value : null;
+
+            // Borra el objeto del PDF
+            pdf = pdf.Remove(objStart, objEnd + 6 - objStart);
+
+            // Ahora agrega el texto en el contenido (objeto 4 0 obj en nuestro PDF)
+            // (Sólo funciona para PDFs generados por nuestra clase)
+            string contentObj = "4 0 obj";
+            int contIdx = pdf.IndexOf(contentObj);
+            int streamIdx = pdf.IndexOf("stream", contIdx);
+            int endstreamIdx = pdf.IndexOf("endstream", contIdx);
+            if (streamIdx != -1 && endstreamIdx != -1)
+            {
+                // Usamos la posición Y del campo Rect
+                string[] rectVals = rect?.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                int x = 130, y = 150; // default
+                if (rectVals != null && rectVals.Length >= 4)
+                {
+                    int.TryParse(rectVals[0], out x);
+                    int.TryParse(rectVals[1], out y);
+                }
+
+                string newText = $"\nBT /F1 12 Tf {x + 5} {y + 2} Td ({fieldValue}) Tj ET";
+                pdf = pdf.Insert(streamIdx + 6, newText);
+            }
+        }
+
+        return pdf;
+    }
+
+    public (List<string> objects, int lastObjNumber) ProcessAttachments(string pdf, string[] txtPaths)
+    {
+        // Extraer objetos del PDF
+        var objects = PDFHelper.ExtractPdfObjects(pdf).ToList();
+        var fileSpecs = new Dictionary<string, int>();
+        int currentObj = objects.Count + 1;
+
+        // Procesar cada archivo a adjuntar
+        foreach (var txtPath in txtPaths)
+        {
+            if (!File.Exists(txtPath))
+                continue;
+
+            string fileName = Path.GetFileName(txtPath);
+            byte[] fileBytes = File.ReadAllBytes(txtPath);
+
+            // 1. Objeto EmbeddedFile
+            string embeddedFileObj = PDFHelper.BuildEmbeddedFileObject(currentObj, fileBytes);
+            objects.Add(embeddedFileObj);
+            int embeddedFileObjNumber = currentObj++;
+            
+            // 2. Objeto FileSpec
+            string fileSpecObj = PDFHelper.BuildFileSpecObject(currentObj, fileName, embeddedFileObjNumber);
+            objects.Add(fileSpecObj);
+            fileSpecs[fileName] = currentObj++;
+            
+            // 3. Objeto FileAttachment (anotación)
+            string annotObj = PDFHelper.BuildFileAttachmentObject(currentObj, fileName, currentObj - 1);
+            objects.Add(annotObj);
+            int annotObjNumber = currentObj++;
+
+            // Actualizar la página con la anotación
+            objects[2] = PDFHelper.UpdatePageWithAnnotation(objects[2], annotObjNumber);
+        }
+
+        // 4. Objeto Names
+        string namesObj = PDFHelper.BuildNamesObject(currentObj, fileSpecs);
+        objects.Add(namesObj);
+        int namesObjNumber = currentObj++;
+
+        // 5. Objeto EmbeddedFiles
+        string embeddedFilesObj = PDFHelper.BuildEmbeddedFilesObject(currentObj, namesObjNumber);
+        objects.Add(embeddedFilesObj);
+        int embeddedFilesObjNumber = currentObj++;
+
+        // 6. Actualizar el Catálogo
+        objects[0] = PDFHelper.UpdateCatalogWithNames(objects[0], embeddedFilesObjNumber);
+
+        return (objects, currentObj);
+    }
+
+    public (List<string> objects, int lastObjNumber) ProcessImage(string pdf, string imagePath, float scale = 0.8f)
+    {
+        var objects = PDFHelper.ExtractPdfObjects(pdf).ToList();
+        byte[] imgBytes = File.ReadAllBytes(imagePath);
+        
+        if (!PDFHelper.GetJpegDimensions(imgBytes, out int imgWidth, out int imgHeight))
+            throw new Exception("No se pudieron leer las dimensiones del JPEG.");
+
+        // Encuentra el objeto Page
+        int pageObjIdx = -1;
+        int pageWidth = 0, pageHeight = 0;
+        for (int i = 0; i < objects.Count; i++)
+        {
+            if (objects[i].Contains("/MediaBox"))
+            {
+                pageObjIdx = i;
+                var match = Regex.Match(objects[i], @"/MediaBox\s*\[\s*\d+\s+\d+\s+(\d+)\s+(\d+)\s*\]");
+                if (match.Success)
+                {
+                    pageWidth = int.Parse(match.Groups[1].Value);
+                    pageHeight = int.Parse(match.Groups[2].Value);
+                }
+                break;
+            }
+        }
+        if (pageObjIdx == -1)
+            throw new Exception("No se encontró el objeto Page con /MediaBox.");
+
+        // Encuentra el objeto de contenido original
+        int contentObjNum = 0;
+        var matchContent = Regex.Match(objects[pageObjIdx], @"/Contents\s+(\d+)\s+0\s+R");
+        if (matchContent.Success)
+            contentObjNum = int.Parse(matchContent.Groups[1].Value);
+        else
+            throw new Exception("No se encontró el objeto /Contents.");
+
+        // Calcula escala y posición centrada
+        float actualScale = Math.Min(pageWidth / (float)imgWidth, pageHeight / (float)imgHeight) * scale;
+        int imgDisplayWidth = (int)(imgWidth * actualScale);
+        int imgDisplayHeight = (int)(imgHeight * actualScale);
+        int imgPosX = (pageWidth - imgDisplayWidth) / 2;
+        int imgPosY = (pageHeight - imgDisplayHeight) / 2;
+
+        // Crea los nuevos objetos
+        int currentObj = objects.Count + 1;
+        string imgObj = PDFHelper.BuildImageObject(currentObj, imgBytes, imgWidth, imgHeight);
+        objects.Add(imgObj);
+        int imgObjNumber = currentObj++;
+
+        string contentObj = PDFHelper.BuildImageContentObject(currentObj, imgObjNumber, imgDisplayWidth, imgDisplayHeight, imgPosX, imgPosY);
+        objects.Add(contentObj);
+        int contentObjNumber = currentObj++;
+
+        // Actualiza el objeto Page
+        objects[pageObjIdx] = PDFHelper.UpdatePageWithImage(objects[pageObjIdx], imgObjNumber, contentObjNumber, contentObjNum);
+
+        return (objects, currentObj);
+    }
+
 }
