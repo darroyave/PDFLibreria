@@ -28,8 +28,6 @@ public interface IPDFCore
 
     List<string> GetPdfFormFieldNames(string filePath);
 
-    // Métodos para fusión de PDFs
-    string[] ExtractPdfObjects(string pdfContent, int numObjects);
     string[] MergePdfObjects(string[] objects1, string[] objects2);
 }
 
@@ -272,24 +270,6 @@ public class PDFCore : IPDFCore
             }
         }
         return fieldNames;
-    }
-
-    public string[] ExtractPdfObjects(string pdfContent, int numObjects)
-    {
-        var objs = new string[numObjects];
-        int searchIdx = 0;
-        for (int i = 1; i <= numObjects; i++)
-        {
-            string objTag = $"{i} 0 obj";
-            int start = pdfContent.IndexOf(objTag, searchIdx, StringComparison.Ordinal);
-            if (start == -1)
-                throw new InvalidOperationException($"No se encontró el objeto {i} en el PDF");
-                
-            int end = pdfContent.IndexOf("endobj", start, StringComparison.Ordinal) + "endobj\n".Length;
-            objs[i - 1] = pdfContent.Substring(start, end - start);
-            searchIdx = end;
-        }
-        return objs;
     }
 
     public string[] MergePdfObjects(string[] objects1, string[] objects2)

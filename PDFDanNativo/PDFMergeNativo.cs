@@ -32,8 +32,8 @@ public class PDFMergeNativo(
             string pdf2 = File.ReadAllText(pdf2Path, Encoding.ASCII);
 
             // Extraer objetos de cada PDF
-            string[] objs1 = pdfCore.ExtractPdfObjects(pdf1, 5);
-            string[] objs2 = pdfCore.ExtractPdfObjects(pdf2, 5);
+            string[] objs1 = PDFHelper.ExtractPdfObjects(pdf1, 5);
+            string[] objs2 = PDFHelper.ExtractPdfObjects(pdf2, 5);
 
             // Combinar los objetos
             string[] mergedObjects = pdfCore.MergePdfObjects(objs1, objs2);
@@ -54,7 +54,7 @@ public class PDFMergeNativo(
             // Escribir todo al archivo
             pdfCore.WritePdfFile(outputPath, header, mergedObjects, xref, trailer);
         }
-        catch (Exception ex) when (ex is not ArgumentException && ex is not ArgumentNullException)
+        catch (Exception ex) when (ex is not FileNotFoundException && ex is not InvalidOperationException)
         {
             throw new IOException($"Error al combinar los archivos PDF: {ex.Message}", ex);
         }
