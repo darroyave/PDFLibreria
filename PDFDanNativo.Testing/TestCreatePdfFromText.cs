@@ -1,4 +1,5 @@
-﻿using PDFDanNativo.Models;
+﻿using PDFDanNativo.Core;
+using PDFDanNativo.Models;
 
 namespace PDFDanNativo.Testing
 {
@@ -6,12 +7,12 @@ namespace PDFDanNativo.Testing
     public sealed class TestCreatePdfFromText
     {
         private readonly IPDFCore _pdfCore;
-        private readonly IPDFCreateNativo _pdfNativo;
+        private readonly IPDFCreateFromTextNativo _pdfNativo;
 
         public TestCreatePdfFromText()
         {
             _pdfCore = new PDFCore();
-            _pdfNativo = new PDFCreateNativo(_pdfCore);
+            _pdfNativo = new PDFCreateFromTextNativo(_pdfCore);
         }
 
 

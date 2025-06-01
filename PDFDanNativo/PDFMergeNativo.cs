@@ -1,4 +1,5 @@
-﻿using PDFDanNativo.Models;
+﻿using PDFDanNativo.Core;
+using PDFDanNativo.Models;
 using System.Text;
 
 namespace PDFDanNativo;

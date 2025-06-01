@@ -1,4 +1,5 @@
-﻿using PDFDanNativo.Models;
+﻿using PDFDanNativo.Core;
+using PDFDanNativo.Models;
 
 namespace PDFDanNativo.Testing
 {

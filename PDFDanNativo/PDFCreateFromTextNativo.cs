@@ -1,8 +1,9 @@
-﻿using PDFDanNativo.Models;
+﻿using PDFDanNativo.Core;
+using PDFDanNativo.Models;
 
 namespace PDFDanNativo;
 
-public interface IPDFCreateNativo
+public interface IPDFCreateFromTextNativo
 {
     /// <summary>
     /// Crea un archivo PDF a partir del texto proporcionado
@@ -13,8 +14,8 @@ public interface IPDFCreateNativo
     void CreatePdfFromText(string filePath, string texto, PDFConfig? config = null);
 }
 
-public class PDFCreateNativo(
-    IPDFCore pdfCore) : IPDFCreateNativo
+public class PDFCreateFromTextNativo(
+    IPDFCore pdfCore) : IPDFCreateFromTextNativo
 {
 
     /// <summary>
