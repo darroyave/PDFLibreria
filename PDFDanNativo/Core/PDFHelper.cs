@@ -150,4 +150,26 @@ public static class PDFHelper
         }
         return output;
     }
+
+    public static string BuildFormFieldWidget(int objNumber, string fieldName, float x, float y, float width, float height)
+    {
+        return $"{objNumber} 0 obj\n" +
+               $"<< /Type /Annot /Subtype /Widget " +
+               $"/Rect [{x} {y} {x + width} {y + height}] " +
+               $"/FT /Tx /T ({fieldName}) /F 4 " +
+               $"/V () /DA (/F1 12 Tf 0 g) " +
+               $"/P {objNumber - 4} 0 R >>\nendobj\n";
+    }
+
+    public static string BuildFormFieldsArray(int[] fieldObjectNumbers)
+    {
+        var refs = string.Join(" ", fieldObjectNumbers.Select(n => $"{n} 0 R"));
+        return $"{fieldObjectNumbers[0] + 1} 0 obj\n[{refs}]\nendobj\n";
+    }
+
+    public static string BuildAcroForm(int fieldsArrayObjectNumber)
+    {
+        return $"{fieldsArrayObjectNumber + 1} 0 obj\n" +
+               $"<< /Fields {fieldsArrayObjectNumber} 0 R >>\nendobj\n";
+    }
 }
