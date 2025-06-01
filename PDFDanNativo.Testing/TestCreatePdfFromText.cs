@@ -6,12 +6,12 @@ namespace PDFDanNativo.Testing
     public sealed class TestCreatePdfFromText
     {
         private readonly IPDFCore _pdfCore;
-        private readonly IPDFNativo _pdfNativo;
+        private readonly IPDFCreateNativo _pdfNativo;
 
         public TestCreatePdfFromText()
         {
             _pdfCore = new PDFCore();
-            _pdfNativo = new PDFNativo(_pdfCore);
+            _pdfNativo = new PDFCreateNativo(_pdfCore);
         }
 
 
