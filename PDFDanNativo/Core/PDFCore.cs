@@ -30,7 +30,7 @@ public interface IPDFCore
 
     string[] MergePdfObjects(string[] objects1, string[] objects2);
 
-    string[] BuildPdfFormObjects(Dictionary<string, string> fields, PDFConfig config);
+    string[] BuildPdfFormObjects(string[] fields, PDFConfig config);
 
 }
 
@@ -317,7 +317,7 @@ public class PDFCore : IPDFCore
         return [.. objects.Select(sb => sb.ToString())];
     }
 
-    public string[] BuildPdfFormObjects(Dictionary<string, string> fields, PDFConfig config)
+    public string[] BuildPdfFormObjects(string[] fields, PDFConfig config)
     {
         var objects = new List<string>();
         int currentObj = 1;
@@ -347,7 +347,7 @@ public class PDFCore : IPDFCore
         var streamBuilder = new StringBuilder();
         foreach (var field in fields)
         {
-            streamBuilder.Append($"BT /F1 {config.FontSize} Tf 50 {yPos} Td ({field.Key}:) Tj ET\n");
+            streamBuilder.Append($"BT /F1 {config.FontSize} Tf 50 {yPos} Td ({field}:) Tj ET\n");
             yPos -= 50; // Espacio entre campos
         }
         string stream = streamBuilder.ToString();
@@ -363,7 +363,7 @@ public class PDFCore : IPDFCore
         yPos = 150f;
         foreach (var field in fields)
         {
-            var widgetObj = PDFHelper.BuildFormFieldWidget(currentObj, field.Key, 130, yPos, 220, 20);
+            var widgetObj = PDFHelper.BuildFormFieldWidget(currentObj, field, 130, yPos, 220, 20);
             objects.Add(widgetObj);
             fieldObjectNumbers.Add(currentObj);
             currentObj++;

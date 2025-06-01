@@ -9,21 +9,21 @@ public interface IPDFCreateWithFormFieldsNativo
     /// Crea un archivo PDF con campos de formulario
     /// </summary>
     /// <param name="filePath">Ruta donde se guardará el archivo PDF</param>
-    /// <param name="fields">Diccionario con los nombres de los campos y sus valores iniciales</param>
+    /// <param name="fields">Array con los nombres de los campos del formulario</param>
     /// <param name="config">Configuración opcional para personalizar el PDF</param>
-    /// <exception cref="ArgumentException">Cuando el diccionario de campos está vacío</exception>
+    /// <exception cref="ArgumentException">Cuando el array de campos está vacío</exception>
     /// <exception cref="IOException">Cuando hay errores de lectura/escritura</exception>
-    void CreatePdfWithFormFields(string filePath, Dictionary<string, string> fields, PDFConfig? config = null);
+    void CreatePdfWithFormFields(string filePath, string[] fields, PDFConfig? config = null);
 }
 
 public class PDFCreateWithFormFieldsNativo(
     IPDFCore pdfCore) : IPDFCreateWithFormFieldsNativo
 {
-    public void CreatePdfWithFormFields(string filePath, Dictionary<string, string> fields, PDFConfig? config = null)
+    public void CreatePdfWithFormFields(string filePath, string[] fields, PDFConfig? config = null)
     {
         config ??= new PDFConfig(); // Usar configuración por defecto si no se proporciona
 
-        if (fields == null || fields.Count == 0)
+        if (fields == null || fields.Length == 0)
             throw new ArgumentException("Debe proporcionar al menos un campo de formulario", nameof(fields));
 
         try
