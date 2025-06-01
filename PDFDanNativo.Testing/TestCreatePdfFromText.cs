@@ -1,4 +1,6 @@
-﻿namespace PDFDanNativo.Testing
+﻿using PDFDanNativo.Models;
+
+namespace PDFDanNativo.Testing
 {
     [TestClass]
     public sealed class TestCreatePdfFromText
@@ -21,7 +23,24 @@
             string filePath = "HolaPDF.pdf";
             string texto = "Hola PDF.";
 
-            _pdfNativo.CreatePdfFromText(filePath, texto);
+            // Uso con configuración personalizada
+            var config = new PDFConfig
+            {
+                PageSize = PageSize.Letter,
+                Orientation = PageOrientation.Landscape,
+                Margins = new Margins(36, 36, 36, 36), // 0.5 pulgadas
+                FontName = "Times-Roman",
+                FontSize = 14,
+                Metadata = new PDFMetadata
+                {
+                    Title = "Mi Documento",
+                    Author = "Dannover Arroyave M.",
+                    Subject = "Documento de ejemplo",
+                    Keywords = "PDF, ejemplo, personalización"
+                }
+            };
+
+            _pdfNativo.CreatePdfFromText(filePath, texto, config);
 
             // Assert
             Assert.IsTrue(_pdfCore.IsValidPdf("HolaPDF.pdf"), "El PDF creado no es válido.");

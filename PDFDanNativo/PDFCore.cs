@@ -1,14 +1,15 @@
 ﻿using System.Text;
+using PDFDanNativo.Models;
 
 namespace PDFDanNativo;
 
 public interface IPDFCore
 {
     // 1. CABECERA
-    string BuildPdfHeader();
+    string BuildPdfHeader(PDFConfig config);
 
     // 2. CUERPO
-    string[] BuildPdfBodyObjects(string texto);
+    string[] BuildPdfBodyObjects(string texto, PDFConfig config);
 
     // 3. TABLA DE REFERENCIA CRUZADA (xref)
     int[] CalculateOffsets(string[] contentParts);
@@ -16,7 +17,7 @@ public interface IPDFCore
     string BuildXrefTable(string[] contentParts, int[] offsets);
 
     // 4. TRAILER
-    string BuildTrailer(int numObjects, int startxref);
+    string BuildTrailer(int numObjects, int startxref, PDFConfig config);
 
     void WritePdfFile(string filePath, string header, string[] bodyObjects, string xref, string trailer);
 
@@ -27,27 +28,82 @@ public interface IPDFCore
     List<string> GetPdfFormFieldNames(string filePath);
 }
 
-public class PDFCore: IPDFCore
+public class PDFCore : IPDFCore
 {
-    public string BuildPdfHeader()
+    private static readonly Dictionary<PageSize, (float width, float height)> PageDimensions = new()
     {
-        return "%PDF-1.4\n";
+        { PageSize.A4, (595.28f, 841.89f) },      // 210mm x 297mm
+        { PageSize.Letter, (612f, 792f) },        // 8.5" x 11"
+        { PageSize.Legal, (612f, 1008f) },        // 8.5" x 14"
+        { PageSize.A3, (841.89f, 1190.55f) }      // 297mm x 420mm
+    };
+
+    public string BuildPdfHeader(PDFConfig config)
+    {
+        var header = new StringBuilder();
+        header.AppendLine("%PDF-1.4");
+        
+        // Agregar metadatos si están presentes
+        if (!string.IsNullOrEmpty(config.Metadata.Title) ||
+            !string.IsNullOrEmpty(config.Metadata.Author) ||
+            !string.IsNullOrEmpty(config.Metadata.Subject) ||
+            !string.IsNullOrEmpty(config.Metadata.Keywords))
+        {
+            header.AppendLine("%%PDFDanNativo Metadata");
+            if (!string.IsNullOrEmpty(config.Metadata.Title))
+                header.AppendLine($"%%Title: {config.Metadata.Title}");
+            if (!string.IsNullOrEmpty(config.Metadata.Author))
+                header.AppendLine($"%%Author: {config.Metadata.Author}");
+            if (!string.IsNullOrEmpty(config.Metadata.Subject))
+                header.AppendLine($"%%Subject: {config.Metadata.Subject}");
+            if (!string.IsNullOrEmpty(config.Metadata.Keywords))
+                header.AppendLine($"%%Keywords: {config.Metadata.Keywords}");
+        }
+
+        return header.ToString();
     }
 
-    public string[] BuildPdfBodyObjects(string texto)
+    public string[] BuildPdfBodyObjects(string texto, PDFConfig config)
     {
+        // Obtener dimensiones de página según configuración
+        var (width, height) = PageDimensions[config.PageSize];
+        if (config.Orientation == PageOrientation.Landscape)
+            (width, height) = (height, width);
+
+        // Ajustar dimensiones según márgenes
+        width -= (config.Margins.Left + config.Margins.Right);
+        height -= (config.Margins.Top + config.Margins.Bottom);
+
         // (objetos PDF: catálogo, páginas, página, contenido, fuente)
         string obj1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
         string obj2 = "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
-        string obj3 = "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n";
+        
+        // Página con dimensiones y márgenes configurados
+        string obj3 = $"3 0 obj\n<< /Type /Page /Parent 2 0 R " +
+                     $"/MediaBox [0 0 {width} {height}] " +
+                     $"/Contents 4 0 R " +
+                     $"/Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n";
 
-        // Escape de paréntesis
-        string textEscaped = texto.Replace("(", "\\(").Replace(")", "\\)");
+        // Escape de paréntesis y caracteres especiales
+        string textEscaped = texto.Replace("(", "\\(")
+                                .Replace(")", "\\)")
+                                .Replace("\\", "\\\\")
+                                .Replace("\r", "\\r")
+                                .Replace("\n", "\\n");
 
-        //  flujo de contenido de texto
-        string obj4_stream = $"BT\n70 100 TD\n/F1 24 Tf\n({textEscaped}) Tj\nET";
+        // Posición inicial del texto considerando márgenes
+        float startX = config.Margins.Left;
+        float startY = height - config.Margins.Top; // PDF usa coordenadas desde abajo
+
+        // Flujo de contenido con formato personalizado
+        string obj4_stream = $"BT\n{startX} {startY} TD\n" +
+                           $"/F1 {config.FontSize} Tf\n" +
+                           $"({textEscaped}) Tj\nET";
+        
         string obj4 = $"4 0 obj\n<< /Length {obj4_stream.Length} >>\nstream\n{obj4_stream}\nendstream\nendobj\n";
-        string obj5 = "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n";
+        
+        // Fuente configurada
+        string obj5 = $"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /{config.FontName} >>\nendobj\n";
 
         // Junta el cuerpo (Body)
         return [obj1, obj2, obj3, obj4, obj5];
@@ -77,9 +133,37 @@ public class PDFCore: IPDFCore
         return xref.ToString();
     }
 
-    public string BuildTrailer(int numObjects, int startxref)
+    public string BuildTrailer(int numObjects, int startxref, PDFConfig config)
     {
-        return $"trailer\n<< /Size {numObjects} /Root 1 0 R >>\nstartxref\n{startxref}\n%%EOF\n";
+        var trailer = new StringBuilder();
+        trailer.AppendLine("trailer");
+        trailer.AppendLine("<<");
+        trailer.AppendLine($"  /Size {numObjects}");
+        trailer.AppendLine("  /Root 1 0 R");
+
+        // Agregar metadatos al trailer si están presentes
+        if (!string.IsNullOrEmpty(config.Metadata.Title) ||
+            !string.IsNullOrEmpty(config.Metadata.Author) ||
+            !string.IsNullOrEmpty(config.Metadata.Subject) ||
+            !string.IsNullOrEmpty(config.Metadata.Keywords))
+        {
+            trailer.AppendLine("  /Info <<");
+            if (!string.IsNullOrEmpty(config.Metadata.Title))
+                trailer.AppendLine($"    /Title ({config.Metadata.Title})");
+            if (!string.IsNullOrEmpty(config.Metadata.Author))
+                trailer.AppendLine($"    /Author ({config.Metadata.Author})");
+            if (!string.IsNullOrEmpty(config.Metadata.Subject))
+                trailer.AppendLine($"    /Subject ({config.Metadata.Subject})");
+            if (!string.IsNullOrEmpty(config.Metadata.Keywords))
+                trailer.AppendLine($"    /Keywords ({config.Metadata.Keywords})");
+            trailer.AppendLine($"    /Creator ({config.Metadata.Creator})");
+            trailer.AppendLine($"    /CreationDate (D:{config.Metadata.CreationDate:yyyyMMddHHmmss})");
+            trailer.AppendLine("  >>");
+        }
+
+        trailer.AppendLine(">>");
+        trailer.AppendLine($"startxref\n{startxref}\n%%EOF");
+        return trailer.ToString();
     }
 
     public void WritePdfFile(string filePath, string header, string[] bodyObjects, string xref, string trailer)
