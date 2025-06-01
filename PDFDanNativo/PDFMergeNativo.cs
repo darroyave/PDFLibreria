@@ -54,7 +54,7 @@ public class PDFMergeNativo(
             // Escribir todo al archivo
             pdfCore.WritePdfFile(outputPath, header, mergedObjects, xref, trailer);
         }
-        catch (Exception ex) when (ex is not ArgumentException && ex is not ArgumentNullException)
+        catch (Exception ex) when (ex is not FileNotFoundException && ex is not InvalidOperationException)
         {
             throw new IOException($"Error al combinar los archivos PDF: {ex.Message}", ex);
         }
