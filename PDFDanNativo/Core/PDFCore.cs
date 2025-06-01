@@ -29,6 +29,14 @@ public interface IPDFCore
     List<string> GetPdfFormFieldNames(string filePath);
 
     string[] MergePdfObjects(string[] objects1, string[] objects2);
+
+    string[] BuildPdfFormObjects(Dictionary<string, string> fields, PDFConfig config);
+
+    string BuildFormFieldWidget(int objNumber, string fieldName, float x, float y, float width, float height);
+
+    string BuildFormFieldsArray(int[] fieldObjectNumbers);
+
+    string BuildAcroForm(int fieldsArrayObjectNumber);
 }
 
 public class PDFCore : IPDFCore
@@ -312,5 +320,90 @@ public class PDFCore : IPDFCore
         ];
 
         return [.. objects.Select(sb => sb.ToString())];
+    }
+
+    public string[] BuildPdfFormObjects(Dictionary<string, string> fields, PDFConfig config)
+    {
+        var objects = new List<string>();
+        int currentObj = 1;
+
+        // 1. Catalog con AcroForm
+        objects.Add($"{currentObj} 0 obj\n<< /Type /Catalog /Pages {currentObj + 1} 0 R /AcroForm {currentObj + 8} 0 R >>\nendobj\n");
+        currentObj++;
+
+        // 2. Pages
+        objects.Add($"{currentObj} 0 obj\n<< /Type /Pages /Kids [{currentObj + 1} 0 R] /Count 1 >>\nendobj\n");
+        currentObj++;
+
+        // 3. Page con Annots
+        var annotsRefs = string.Join(" ", fields.Select((_, i) => $"{currentObj + 3 + i} 0 R"));
+        var (width, height) = PageDimensions[config.PageSize];
+        if (config.Orientation == PageOrientation.Landscape)
+            (width, height) = (height, width);
+        objects.Add($"{currentObj} 0 obj\n<< /Type /Page /Parent {currentObj - 1} 0 R " +
+                   $"/MediaBox [0 0 {width} {height}] " +
+                   $"/Contents {currentObj + 1} 0 R " +
+                   $"/Resources << /Font << /F1 {currentObj + 2} 0 R >> >> " +
+                   $"/Annots [{annotsRefs}] >>\nendobj\n");
+        currentObj++;
+
+        // 4. Contents (posiciona las etiquetas de los campos)
+        var yPos = 160f;
+        var streamBuilder = new StringBuilder();
+        foreach (var field in fields)
+        {
+            streamBuilder.Append($"BT /F1 {config.FontSize} Tf 50 {yPos} Td ({field.Key}:) Tj ET\n");
+            yPos -= 50; // Espacio entre campos
+        }
+        string stream = streamBuilder.ToString();
+        objects.Add($"{currentObj} 0 obj\n<< /Length {stream.Length} >>\nstream\n{stream}\nendstream\nendobj\n");
+        currentObj++;
+
+        // 5. Font
+        objects.Add($"{currentObj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /{config.FontName} >>\nendobj\n");
+        currentObj++;
+
+        // 6. Form Field Widgets
+        var fieldObjectNumbers = new List<int>();
+        yPos = 150f;
+        foreach (var field in fields)
+        {
+            var widgetObj = BuildFormFieldWidget(currentObj, field.Key, 130, yPos, 220, 20);
+            objects.Add(widgetObj);
+            fieldObjectNumbers.Add(currentObj);
+            currentObj++;
+            yPos -= 50;
+        }
+
+        // 7. Fields Array
+        objects.Add(BuildFormFieldsArray(fieldObjectNumbers.ToArray()));
+        currentObj++;
+
+        // 8. AcroForm
+        objects.Add(BuildAcroForm(currentObj - 1));
+
+        return objects.ToArray();
+    }
+
+    public string BuildFormFieldWidget(int objNumber, string fieldName, float x, float y, float width, float height)
+    {
+        return $"{objNumber} 0 obj\n" +
+               $"<< /Type /Annot /Subtype /Widget " +
+               $"/Rect [{x} {y} {x + width} {y + height}] " +
+               $"/FT /Tx /T ({fieldName}) /F 4 " +
+               $"/V () /DA (/F1 12 Tf 0 g) " +
+               $"/P {objNumber - 4} 0 R >>\nendobj\n";
+    }
+
+    public string BuildFormFieldsArray(int[] fieldObjectNumbers)
+    {
+        var refs = string.Join(" ", fieldObjectNumbers.Select(n => $"{n} 0 R"));
+        return $"{fieldObjectNumbers[0] + 1} 0 obj\n[{refs}]\nendobj\n";
+    }
+
+    public string BuildAcroForm(int fieldsArrayObjectNumber)
+    {
+        return $"{fieldsArrayObjectNumber + 1} 0 obj\n" +
+               $"<< /Fields {fieldsArrayObjectNumber} 0 R >>\nendobj\n";
     }
 }
