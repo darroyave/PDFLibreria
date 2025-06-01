@@ -17,15 +17,17 @@
         public void TestMethodCreatePdfFromText()
         {
             // Arrange
+
             string filePath = "HolaPDF.pdf";
             string texto = "Hola PDF.";
 
-            // Create PDF from text
             _pdfNativo.CreatePdfFromText(filePath, texto);
 
             // Assert
             Assert.IsTrue(_pdfCore.IsValidPdf("HolaPDF.pdf"), "El PDF creado no es válido.");
+
             Assert.AreEqual(1, _pdfCore.GetPageCount("HolaPDF.pdf"), "El número de páginas no es correcto.");
+
         }
     }
 }
