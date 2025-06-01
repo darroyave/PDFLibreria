@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PDFLibreria")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+965d0d58de554dea1d5d974f3b7b138a77c08ebd")]
 [assembly: System.Reflection.AssemblyProductAttribute("PDFLibreria")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PDFLibreria")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
