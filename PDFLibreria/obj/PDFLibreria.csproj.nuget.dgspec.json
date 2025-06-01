@@ -1,37 +1,30 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\PDFLibreria.csproj": {}
+    "/app/PDFLibreria/PDFLibreria.csproj": {}
   },
   "projects": {
-    "C:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\PDFLibreria.csproj": {
+    "/app/PDFLibreria/PDFLibreria.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\PDFLibreria.csproj",
+        "projectUniqueName": "/app/PDFLibreria/PDFLibreria.csproj",
         "projectName": "PDFLibreria",
-        "projectPath": "C:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\PDFLibreria.csproj",
-        "packagesPath": "C:\\Users\\darroyave\\.nuget\\packages\\",
-        "outputPath": "C:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\obj\\",
+        "projectPath": "/app/PDFLibreria/PDFLibreria.csproj",
+        "packagesPath": "/home/swebot/.nuget/packages/",
+        "outputPath": "/app/PDFLibreria/obj/",
         "projectStyle": "PackageReference",
-        "fallbackFolders": [
-          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
-        ],
         "configFilePaths": [
-          "C:\\Users\\darroyave\\AppData\\Roaming\\NuGet\\NuGet.Config",
-          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
-          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+          "/home/swebot/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
-          "net9.0"
+          "net6.0"
         ],
         "sources": {
-          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
-          "C:\\Program Files\\dotnet\\library-packs": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
-          "net9.0": {
-            "targetAlias": "net9.0",
+          "net6.0": {
+            "targetAlias": "net6.0",
             "projectReferences": {}
           }
         },
@@ -39,17 +32,11 @@
           "warnAsError": [
             "NU1605"
           ]
-        },
-        "restoreAuditProperties": {
-          "enableAudit": "true",
-          "auditLevel": "low",
-          "auditMode": "direct"
-        },
-        "SdkAnalysisLevel": "9.0.300"
+        }
       },
       "frameworks": {
-        "net9.0": {
-          "targetAlias": "net9.0",
+        "net6.0": {
+          "targetAlias": "net6.0",
           "imports": [
             "net461",
             "net462",
@@ -66,7 +53,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.300/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/home/jules/.dotnet/sdk/6.0.428/RuntimeIdentifierGraph.json"
         }
       }
     }
