@@ -1,6 +1,4 @@
-﻿using System;
-using System.Security.Cryptography;
-using System.Text;
+﻿using System.Text;
 
 namespace TestProject1;
 
@@ -671,12 +669,12 @@ public class NativePDF: INativePDF
 
         // 2. Calcula los valores U, O y el key (ver specs PDF)
         // (Aquí, versión simple, no soporta permisos personalizados ni contraseñas muy largas)
-        byte[] userPass = PadOrTruncatePassword(userPassword);
-        byte[] ownerPass = PadOrTruncatePassword(ownerPassword);
-        byte[] O = ComputeO(userPass, ownerPass);
-        byte[] encryptionKey = ComputeEncryptionKey(userPass, O);
+        byte[] userPass = NativePDFHelper.PadOrTruncatePassword(userPassword);
+        byte[] ownerPass = NativePDFHelper.PadOrTruncatePassword(ownerPassword);
+        byte[] O = NativePDFHelper.ComputeO(userPass, ownerPass);
+        byte[] encryptionKey = NativePDFHelper.ComputeEncryptionKey(userPass, O);
 
-        byte[] U = ComputeU(encryptionKey);
+        byte[] U = NativePDFHelper.ComputeU(encryptionKey);
 
         // 3. Construye el objeto Encrypt (obj N 0 obj)
         // Vamos a ponerlo al final, por lo que su número es el siguiente al último objeto
@@ -686,7 +684,7 @@ public class NativePDF: INativePDF
 
         string encryptObj =
             $"{encryptObjNum} 0 obj\n" +
-            $"<< /Filter /Standard /V 1 /R 2 /O <{ToHex(O)}> /U <{ToHex(U)}> /P -4 /Length 40 >>\nendobj\n";
+            $"<< /Filter /Standard /V 1 /R 2 /O <{NativePDFHelper.ToHex(O)}> /U <{NativePDFHelper.ToHex(U)}> /P -4 /Length 40 >>\nendobj\n";
 
         // 4. Modifica el trailer para agregar /Encrypt N 0 R
         // (Lo agregaremos al reconstruir el PDF)
@@ -713,7 +711,7 @@ public class NativePDF: INativePDF
                     byte[] stream = Encoding.ASCII.GetBytes(obj.Substring(streamIdx, endStreamIdx - streamIdx));
                     byte[] after = Encoding.ASCII.GetBytes(obj.Substring(endStreamIdx));
                     // Cifra el stream con RC4 usando la key
-                    byte[] encryptedStream = RC4(stream, encryptionKey);
+                    byte[] encryptedStream = NativePDFHelper.RC4(stream, encryptionKey);
                     newObjectBytes.Add(before);
                     newObjectBytes.Add(encryptedStream);
                     newObjectBytes.Add(after);
@@ -752,78 +750,5 @@ public class NativePDF: INativePDF
                 bw.Write(arr);
             bw.Write(Encoding.ASCII.GetBytes(trailerSb.ToString()));
         }
-    }
-
-    // --- Helpers para PDF encryption RC4 40bits ---
-    private byte[] PadOrTruncatePassword(string pwd)
-    {
-        byte[] pad = {
-        0x28,0xBF,0x4E,0x5E,0x4E,0x75,0x8A,0x41,
-        0x64,0x00,0x4E,0x56,0xFF,0xFA,0x01,0x08,
-        0x2E,0x2E,0x00,0xB6,0xD0,0x68,0x3E,0x80,
-        0x2F,0x0C,0xA9,0xFE,0x64,0x53,0x69,0x7A
-    };
-        byte[] pwdBytes = Encoding.ASCII.GetBytes(pwd ?? "");
-        byte[] outBytes = new byte[32];
-        int len = Math.Min(pwdBytes.Length, 32);
-        Array.Copy(pwdBytes, outBytes, len);
-        if (len < 32) Array.Copy(pad, 0, outBytes, len, 32 - len);
-        return outBytes;
-    }
-    private byte[] ComputeO(byte[] user, byte[] owner)
-    {
-        // owner = RC4(ownerpad, userpad)
-        return RC4(owner, user);
-    }
-    private  byte[] ComputeEncryptionKey(byte[] userPad, byte[] O)
-    {
-        // key = MD5(userpad + O + P + id + 0s)
-        // Para PDF básico, solo 5 bytes de MD5(userPad+O+P+4bytes+0)
-        using (var md5 = MD5.Create())
-        {
-            byte[] P = BitConverter.GetBytes(-4);
-            byte[] input = new byte[32 + 32 + 4];
-            Array.Copy(userPad, 0, input, 0, 32);
-            Array.Copy(O, 0, input, 32, 32);
-            Array.Copy(P, 0, input, 64, 4);
-            var hash = md5.ComputeHash(input);
-            byte[] key = new byte[5]; // 40bits
-            Array.Copy(hash, key, 5);
-            return key;
-        }
-    }
-    private  byte[] ComputeU(byte[] key)
-    {
-        // U = RC4(key, pad)
-        byte[] pad = PadOrTruncatePassword("");
-        return RC4(pad, key);
-    }
-    private  string ToHex(byte[] data)
-    {
-        StringBuilder sb = new StringBuilder();
-        foreach (byte b in data)
-            sb.Append(b.ToString("X2"));
-        return sb.ToString();
-    }
-    private  byte[] RC4(byte[] data, byte[] key)
-    {
-        byte[] s = new byte[256];
-        for (int i = 0; i < 256; i++) s[i] = (byte)i;
-        int j = 0;
-        for (int i = 0; i < 256; i++)
-        {
-            j = (j + s[i] + key[i % key.Length]) & 0xFF;
-            byte temp = s[i]; s[i] = s[j]; s[j] = temp;
-        }
-        byte[] output = new byte[data.Length];
-        int iidx = 0, jidx = 0;
-        for (int k = 0; k < data.Length; k++)
-        {
-            iidx = (iidx + 1) & 0xFF;
-            jidx = (jidx + s[iidx]) & 0xFF;
-            byte temp = s[iidx]; s[iidx] = s[jidx]; s[jidx] = temp;
-            output[k] = (byte)(data[k] ^ s[(s[iidx] + s[jidx]) & 0xFF]);
-        }
-        return output;
     }
 }
