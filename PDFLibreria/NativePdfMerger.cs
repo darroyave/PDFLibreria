@@ -129,7 +129,7 @@ namespace PDFLibreria
 
             // 6. Update the /Pages object (very naively)
             string tempMergedContent = mergedPdfContentBuilder.ToString();
-            tempMergedContent = UpdatePagesObjectInMergedContent(tempMergedContent, maxObjNumPdf1, pdf1String, pdf2String, pdfEncoding);
+            tempMergedContent = UpdatePagesObjectInMergedContent(tempMergedContent, maxObjNumPdf1, pdf1String, pdf2String, pdfEncoding); // Updated Call
 
             // 7. Reconstruct XRef Table and Trailer
             byte[] finalMergedBodyBytes = pdfEncoding.GetBytes(tempMergedContent);
@@ -259,47 +259,210 @@ namespace PDFLibreria
             return currentBody;
         }
 
-        private string UpdatePagesObjectInMergedContent(string mergedContent, int pdf2Offset, string pdf1OriginalString, string pdf2OriginalString, Encoding enc)
+        // Add these helper methods within the NativePdfMerger class:
+        private string GetObjectContent(string pdfString, string objNumAndGen)
         {
-            string pagesPattern = @"(\d+\s+\d+\s+obj\s*<<[^>]*?/Type\s*/Pages[^>]*?)/Kids\s*\[([^\]]*)\]([^>]*?/Count\s*)(\d+)([^>]*?>>\s*endobj)";
-
-            Match pdf1PagesMatch = Regex.Match(mergedContent, pagesPattern, RegexOptions.Singleline);
-
-            if (!pdf1PagesMatch.Success) {
-                Console.WriteLine("WARNING (UpdatePagesObject): PDF1 main /Pages object not found or pattern mismatch. Skipping page tree update.");
-                return mergedContent;
-            }
-
-            string pdf1KidsString = pdf1PagesMatch.Groups[2].Value.Trim();
-            int pdf1Count = int.TryParse(pdf1PagesMatch.Groups[4].Value, out var c1) ? c1 : 0;
-
-            Match pdf2PagesMatch = Regex.Match(pdf2OriginalString, pagesPattern, RegexOptions.Singleline);
-             if (!pdf2PagesMatch.Success) {
-                Console.WriteLine("WARNING (UpdatePagesObject): PDF2 main /Pages object not found or pattern mismatch. Skipping page tree update.");
-                return mergedContent;
-            }
-            string pdf2KidsString = pdf2PagesMatch.Groups[2].Value.Trim();
-            int pdf2Count = int.TryParse(pdf2PagesMatch.Groups[4].Value, out var c2) ? c2 : 0;
-
-            StringBuilder renumberedPdf2Kids = new StringBuilder();
-            Regex kidRefRegex = new Regex(@"(\d+)\s+(\d+)\s+R");
-            foreach(Match kidMatch in kidRefRegex.Matches(pdf2KidsString))
+            // objNumAndGen should be like "10 0"
+            // Regex to find "X Y obj ... endobj"
+            // Need to handle cases where objNumAndGen might be part of a different string by ensuring "obj" keyword follows.
+            Match objMatch = Regex.Match(pdfString, @"(^|\s)" + Regex.Escape(objNumAndGen) + @"\s+obj(.*?)endobj", RegexOptions.Singleline);
+            if (objMatch.Success)
             {
-                if (int.TryParse(kidMatch.Groups[1].Value, out int kidObjNum))
-                {
-                    renumberedPdf2Kids.Append($"{kidObjNum + pdf2Offset} {kidMatch.Groups[2].Value} R ");
-                }
+                return objMatch.Groups[2].Value.Trim(); // Content between "obj" and "endobj"
             }
-
-            string combinedKids = (pdf1KidsString + " " + renumberedPdf2Kids.ToString()).Trim();
-            int newTotalCount = pdf1Count + pdf2Count;
-
-            string updatedPagesObject =
-                $"{pdf1PagesMatch.Groups[1].Value}/Kids [{combinedKids}] {pdf1PagesMatch.Groups[3].Value}{newTotalCount}{pdf1PagesMatch.Groups[5].Value}";
-            return mergedContent.Replace(pdf1PagesMatch.Groups[0].Value, updatedPagesObject);
+            return null;
         }
 
-        private string GetObjectNumberAndGen(string objectDefinitionStart) {
+        private string ExtractDictionaryValue(string dictContent, string keyName)
+        {
+            const string VALUE_REGEX_PATTERN = @"(\d+\s+\d+\s+R|\[[^\]]*\]|\<\<[^>]*\>\>|\([\s\S]*?\)|/[^ /\[<>()]+|\d[\d.]*|true|false)";
+            // Order matters: indirect ref, array, dict, literal string, name, number, boolean
+            // This is still simplified (e.g. literal string parsing, hex strings <...>).
+
+            Match valMatch = Regex.Match(dictContent, @"/" + Regex.Escape(keyName) + @"\s*(" + VALUE_REGEX_PATTERN + ")", RegexOptions.Singleline);
+
+            if (valMatch.Success)
+            {
+                // Group 0 is the whole match, e.g. "/Count 1"
+                // Group 1 is the start of VALUE_REGEX_PATTERN, which is the first alternative (indirect ref)
+                // Group 2 is the actual captured value by one of the alternatives in VALUE_REGEX_PATTERN
+                // We need to find which group in the alternation actually captured.
+                // The overall capture for VALUE_REGEX_PATTERN is Groups[1] if not nested,
+                // but Regex.Match stores captures by their group index in the pattern.
+                // The "VALUE_REGEX_PATTERN" is wrapped in an outer capture group by C# automatically for the string.
+                // So Groups[1] will be the content matched by the entire VALUE_REGEX_PATTERN string.
+                return valMatch.Groups[1].Value.Trim();
+            }
+            return null;
+        }
+
+        private List<string> ExtractArrayElements(string arrayString)
+        {
+            var elements = new List<string>();
+            if (string.IsNullOrWhiteSpace(arrayString) || !arrayString.StartsWith("[") || !arrayString.EndsWith("]"))
+            {
+                return elements;
+            }
+            string content = arrayString.Substring(1, arrayString.Length - 2).Trim();
+
+            // Regex to find "X Y R" references or other simple elements.
+            // This is simplified; arrays can contain various types.
+            Regex elementRegex = new Regex(@"(\d+\s+\d+\s+R|\S+)");
+            MatchCollection matches = elementRegex.Matches(content);
+            foreach (Match match in matches)
+            {
+                elements.Add(match.Value);
+            }
+            return elements;
+        }
+
+
+        // Replacement for UpdatePagesObjectInMergedContent
+        private string UpdatePagesObjectInMergedContent(string mergedContent, int pdf2ObjectOffset, string pdf1OriginalString, string pdf2OriginalString, Encoding enc)
+        {
+            Console.WriteLine("Attempting to update Pages object in merged content...");
+
+            // 1. Find PDF1's Catalog (Root object) to then find its Pages object
+            string pdf1RootRef = GetRootObjectRef(pdf1OriginalString); // e.g., "1 0 R"
+            if (pdf1RootRef == null) {
+                Console.WriteLine("WARNING (UpdatePagesObject): PDF1 Root object reference not found. Skipping page tree update.");
+                return mergedContent;
+            }
+            string pdf1RootObjNum = pdf1RootRef.Replace(" R", ""); // e.g., "1 0"
+            string pdf1RootContent = GetObjectContent(pdf1OriginalString, pdf1RootObjNum);
+            if (pdf1RootContent == null) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF1 Root object content for '{pdf1RootObjNum}' not found. Skipping page tree update.");
+                return mergedContent;
+            }
+            string pdf1PagesRef = ExtractDictionaryValue(pdf1RootContent, "Pages"); // e.g., "2 0 R"
+            if (pdf1PagesRef == null || !pdf1PagesRef.EndsWith(" R")) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF1 /Pages reference in Root object '{pdf1RootObjNum}' not found or not an indirect reference. Skipping page tree update.");
+                return mergedContent;
+            }
+            string pdf1PagesObjNum = pdf1PagesRef.Replace(" R", ""); // e.g., "2 0"
+            //string pdf1PagesOriginalContent = GetObjectContent(pdf1OriginalString, pdf1PagesObjNum); // Full content of Pages obj
+
+            // We need to find this same Pages object in the *mergedContent* because its definition might be there.
+            // The object number (pdf1PagesObjNum) should still be valid as we assume PDF1 objects are not renumbered.
+            string pdf1PagesCurrentContentWithWrapper = GetObjectContentWithWrapper(mergedContent, pdf1PagesObjNum);
+            if (pdf1PagesCurrentContentWithWrapper == null) {
+                 Console.WriteLine($"WARNING (UpdatePagesObject): PDF1 /Pages object {pdf1PagesObjNum} not found in *merged* content. Skipping page tree update.");
+                return mergedContent;
+            }
+
+            string pdf1PagesDict = GetObjectContent(mergedContent, pdf1PagesObjNum); // Just the dictionary part from merged
+             if (pdf1PagesDict == null) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF1 /Pages dictionary for {pdf1PagesObjNum} could not be extracted from *merged* content. Skipping page tree update.");
+                return mergedContent;
+            }
+
+            string pdf1KidsArrayStr = ExtractDictionaryValue(pdf1PagesDict, "Kids");
+            string pdf1CountStr = ExtractDictionaryValue(pdf1PagesDict, "Count");
+
+            if (pdf1KidsArrayStr == null || !pdf1KidsArrayStr.StartsWith("[")) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF1 /Kids array for Pages object {pdf1PagesObjNum} not found in merged content. Skipping page tree update.");
+                return mergedContent;
+            }
+            if (pdf1CountStr == null) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF1 /Count for Pages object {pdf1PagesObjNum} not found in merged content. Skipping page tree update.");
+                return mergedContent;
+            }
+
+            List<string> pdf1Kids = ExtractArrayElements(pdf1KidsArrayStr);
+            int.TryParse(pdf1CountStr, out int pdf1Count);
+            Console.WriteLine($"DEBUG: PDF1 Count: string='{pdf1CountStr}', parsed='{pdf1Count}', kids_array_count='{pdf1Kids.Count}'");
+
+            // 2. Find PDF2's Pages object, its Kids, and Count (from pdf2OriginalString)
+            string pdf2RootRef = GetRootObjectRef(pdf2OriginalString);
+            if (pdf2RootRef == null) {
+                Console.WriteLine("WARNING (UpdatePagesObject): PDF2 Root object reference not found. Cannot get its pages.");
+                return mergedContent; // No pages from PDF2 to add if its root is not found
+            }
+            string pdf2RootObjNum = pdf2RootRef.Replace(" R", "");
+            string pdf2RootContent = GetObjectContent(pdf2OriginalString, pdf2RootObjNum);
+            if (pdf2RootContent == null) {
+                 Console.WriteLine($"WARNING (UpdatePagesObject): PDF2 Root object content for '{pdf2RootObjNum}' not found. Cannot get its pages.");
+                return mergedContent;
+            }
+            string pdf2PagesRef = ExtractDictionaryValue(pdf2RootContent, "Pages");
+            if (pdf2PagesRef == null || !pdf2PagesRef.EndsWith(" R")) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF2 /Pages reference in its Root object '{pdf2RootObjNum}' not found or not an indirect reference. Cannot get its pages.");
+                return mergedContent;
+            }
+            string pdf2PagesObjNum = pdf2PagesRef.Replace(" R", "");
+            string pdf2PagesOriginalContent = GetObjectContent(pdf2OriginalString, pdf2PagesObjNum); // Full content of Pages obj
+            if (pdf2PagesOriginalContent == null) {
+                 Console.WriteLine($"WARNING (UpdatePagesObject): PDF2 /Pages object content for '{pdf2PagesObjNum}' not found in original PDF2. Cannot get its pages.");
+                return mergedContent;
+            }
+
+            string pdf2KidsArrayStr = ExtractDictionaryValue(pdf2PagesOriginalContent, "Kids");
+            string pdf2CountStr = ExtractDictionaryValue(pdf2PagesOriginalContent, "Count");
+
+            if (pdf2KidsArrayStr == null || !pdf2KidsArrayStr.StartsWith("[")) {
+                Console.WriteLine($"WARNING (UpdatePagesObject): PDF2 /Kids array for its Pages object {pdf2PagesObjNum} not found. Cannot add its pages.");
+                return mergedContent;
+            }
+            if (pdf2CountStr == null) {
+                 Console.WriteLine($"WARNING (UpdatePagesObject): PDF2 /Count for its Pages object {pdf2PagesObjNum} not found. Cannot accurately add its pages.");
+                // We could proceed but count would be wrong. For now, let's be strict.
+                return mergedContent;
+            }
+
+            List<string> pdf2Kids = ExtractArrayElements(pdf2KidsArrayStr);
+            int.TryParse(pdf2CountStr, out int pdf2CountVal);
+            Console.WriteLine($"DEBUG: PDF2 Count: string='{pdf2CountStr}', parsed='{pdf2CountVal}', kids_array_count='{pdf2Kids.Count}'");
+
+            // 3. Renumber PDF2's Kids and combine
+            StringBuilder renumberedPdf2KidsBuilder = new StringBuilder();
+            foreach (string kidRef in pdf2Kids) // kidRef is like "X Y R"
+            {
+                Match m = Regex.Match(kidRef, @"(\d+)\s+(\d+\s+R)");
+                if (m.Success && int.TryParse(m.Groups[1].Value, out int kidObjNum))
+                {
+                    renumberedPdf2KidsBuilder.Append($"{kidObjNum + pdf2ObjectOffset} {m.Groups[2].Value} ");
+                }
+                // Else: kid might not be an indirect reference, or parsing failed. Skip for now.
+            }
+            string renumberedPdf2KidsString = renumberedPdf2KidsBuilder.ToString().TrimEnd();
+
+            // 4. Construct the new Kids array and Count for PDF1's Pages object
+            string combinedKidsString = (string.Join(" ", pdf1Kids) + " " + renumberedPdf2KidsString).Trim();
+            int newTotalCount = pdf1Count + pdf2CountVal; // Use actual count from PDF2 if available
+
+            // 5. Replace the /Kids and /Count in PDF1's Pages object *within the mergedContent*
+            // This is tricky. We need to replace values within the existing << ... >> dictionary.
+            // We'll replace the old /Kids [...] and /Count X an entire new definition.
+
+            string newPdf1PagesDict = pdf1PagesDict;
+            // Replace Kids
+            newPdf1PagesDict = Regex.Replace(newPdf1PagesDict, @"/Kids\s*\[[^\]]*\]", $"/Kids [{combinedKidsString}]", RegexOptions.Singleline);
+            // Replace Count
+            newPdf1PagesDict = Regex.Replace(newPdf1PagesDict, @"/Count\s*\d+", $"/Count {newTotalCount}", RegexOptions.Singleline);
+
+            // Construct the full new object string for PDF1's Pages
+            string updatedPdf1PagesObjectFull = $"{pdf1PagesObjNum} obj\r\n{newPdf1PagesDict}\r\nendobj"; // Ensure newlines like typical PDF
+
+            // Replace the old Pages object string (identified by pdf1PagesCurrentContentWithWrapper) with the new one.
+            string finalMergedContent = mergedContent.Replace(pdf1PagesCurrentContentWithWrapper, updatedPdf1PagesObjectFull);
+
+            Console.WriteLine($"Successfully updated Pages object {pdf1PagesObjNum}. Original Kids: {pdf1Kids.Count}, Added Kids from PDF2: {pdf2Kids.Count}, New Total Kids: {newTotalCount}");
+            return finalMergedContent;
+        }
+
+        // Helper to get the full object definition string: "X Y obj ... endobj"
+        private string GetObjectContentWithWrapper(string pdfString, string objNumAndGen)
+        {
+            Match objMatch = Regex.Match(pdfString, @"(^|\s)" + Regex.Escape(objNumAndGen) + @"\s+obj.*?endobj", RegexOptions.Singleline);
+            if (objMatch.Success)
+            {
+                // If match starts with a space (because of (^|\s)), trim it.
+                return objMatch.Value.TrimStart();
+            }
+            return null;
+        }
+
+        private string GetObjectNumberAndGen(string objectDefinitionStart) { //This method seems to be unused now.
             Match m = Regex.Match(objectDefinitionStart, @"^\s*(\d+\s+\d+)\s+obj");
             return m.Success ? m.Groups[1].Value : null;
         }
