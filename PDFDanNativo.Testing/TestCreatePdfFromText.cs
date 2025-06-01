@@ -27,7 +27,7 @@ namespace PDFDanNativo.Testing
             var config = new PDFConfig
             {
                 PageSize = PageSize.Letter,
-                Orientation = PageOrientation.Landscape,
+                Orientation = PageOrientation.Portrait,
                 Margins = new Margins(36, 36, 36, 36), // 0.5 pulgadas
                 FontName = "Times-Roman",
                 FontSize = 14,
