@@ -1,20 +1,13 @@
-using System;
-
 namespace PDFLibreria;
 
 class Program
 {
     static void Main(string[] args)
     {
-        if (args.Length < 3)
-        {
-            Console.WriteLine("Uso: PDFLibreria.exe <pdf1> <pdf2> <output>");
-            return;
-        }
 
-        string pdf1 = args[0];
-        string pdf2 = args[1];
-        string output = args[2];
+        string pdf1 = "c:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\dummy1.pdf";
+        string pdf2 = "c:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\dummy2.pdf";
+        string output = "c:\\Developer\\.Net Beta\\PDFLibreria\\PDFLibreria\\unido.pdf";
 
         var pdfMerger = new NativePDF();
         
