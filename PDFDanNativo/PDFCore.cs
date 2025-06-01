@@ -21,11 +21,16 @@ public interface IPDFCore
 
     void WritePdfFile(string filePath, string header, string[] bodyObjects, string xref, string trailer);
 
+    // Varios
     bool IsValidPdf(string filePath);
 
     int GetPageCount(string filePath);
 
     List<string> GetPdfFormFieldNames(string filePath);
+
+    // Métodos para fusión de PDFs
+    string[] ExtractPdfObjects(string pdfContent, int numObjects);
+    string[] MergePdfObjects(string[] objects1, string[] objects2);
 }
 
 public class PDFCore : IPDFCore
@@ -267,5 +272,71 @@ public class PDFCore : IPDFCore
             }
         }
         return fieldNames;
+    }
+
+    public string[] ExtractPdfObjects(string pdfContent, int numObjects)
+    {
+        var objs = new string[numObjects];
+        int searchIdx = 0;
+        for (int i = 1; i <= numObjects; i++)
+        {
+            string objTag = $"{i} 0 obj";
+            int start = pdfContent.IndexOf(objTag, searchIdx, StringComparison.Ordinal);
+            if (start == -1)
+                throw new InvalidOperationException($"No se encontró el objeto {i} en el PDF");
+                
+            int end = pdfContent.IndexOf("endobj", start, StringComparison.Ordinal) + "endobj\n".Length;
+            objs[i - 1] = pdfContent.Substring(start, end - start);
+            searchIdx = end;
+        }
+        return objs;
+    }
+
+    public string[] MergePdfObjects(string[] objects1, string[] objects2)
+    {
+        // Aseguramos salto de línea al final de cada objeto
+        for (int i = 0; i < objects1.Length; i++)
+            if (!objects1[i].EndsWith("\n")) objects1[i] += "\n";
+        for (int i = 0; i < objects2.Length; i++)
+            if (!objects2[i].EndsWith("\n")) objects2[i] += "\n";
+
+        // Objetos nuevos
+        StringBuilder[] objects = new StringBuilder[8];
+
+        // 1 0 obj: Catalog
+        objects[0] = new StringBuilder("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        // 2 0 obj: Pages con 2 hijos
+        objects[1] = new StringBuilder("2 0 obj\n<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>\nendobj\n");
+
+        // 3 0 obj: Page 1 (ajusta /Parent, /Contents y /Font)
+        objects[2] = new StringBuilder(objects1[2]
+            .Replace("3 0 obj", "3 0 obj")
+            .Replace("/Parent 2 0 R", "/Parent 2 0 R")
+            .Replace("/Contents 4 0 R", "/Contents 4 0 R")
+            .Replace("/F1 5 0 R", "/F1 5 0 R")
+        );
+
+        // 4 0 obj: Contents 1
+        objects[3] = new StringBuilder(objects1[3].Replace("4 0 obj", "4 0 obj"));
+
+        // 5 0 obj: Font 1
+        objects[4] = new StringBuilder(objects1[4].Replace("5 0 obj", "5 0 obj"));
+
+        // 6 0 obj: Page 2 (ajusta referencias a los objetos correctos)
+        objects[5] = new StringBuilder(objects2[2]
+            .Replace("3 0 obj", "6 0 obj")
+            .Replace("/Parent 2 0 R", "/Parent 2 0 R")
+            .Replace("/Contents 4 0 R", "/Contents 7 0 R")
+            .Replace("/F1 5 0 R", "/F1 8 0 R")
+        );
+
+        // 7 0 obj: Contents 2
+        objects[6] = new StringBuilder(objects2[3].Replace("4 0 obj", "7 0 obj"));
+
+        // 8 0 obj: Font 2
+        objects[7] = new StringBuilder(objects2[4].Replace("5 0 obj", "8 0 obj"));
+
+        return objects.Select(sb => sb.ToString()).ToArray();
     }
 }
