@@ -20,8 +20,8 @@ namespace PDFDanNativo.Testing
         {
             // Arrange
 
-            string filePath = "HolaPDF.pdf";
-            string texto = "Hola PDF.";
+            string filePath = "PaginaPDF2.pdf";
+            string texto = "Pagina 2";
 
             // Uso con configuración personalizada
             var config = new PDFConfig
@@ -41,11 +41,11 @@ namespace PDFDanNativo.Testing
             };
 
             _pdfNativo.CreatePdfFromText(filePath, texto, config);
-
+            
             // Assert
-            Assert.IsTrue(_pdfCore.IsValidPdf("HolaPDF.pdf"), "El PDF creado no es válido.");
+            Assert.IsTrue(_pdfCore.IsValidPdf("PaginaPDF2.pdf"), "El PDF creado no es válido.");
 
-            Assert.AreEqual(1, _pdfCore.GetPageCount("HolaPDF.pdf"), "El número de páginas no es correcto.");
+            Assert.AreEqual(1, _pdfCore.GetPageCount("PaginaPDF2.pdf"), "El número de páginas no es correcto.");
 
         }
     }
